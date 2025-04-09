@@ -122,6 +122,46 @@ func (c *apiConfig) addUserHandler(w http.ResponseWriter, r *http.Request) {
 	w.Write(responseData)
 }
 
+func (c *apiConfig) getAllChirpsHandler(w http.ResponseWriter, r *http.Request) {
+	type createdChirpLower struct {
+		ID         uuid.UUID `json:"id"`
+		Created_at time.Time `json:"created_at"`
+		Updated_at time.Time `json:"updated_at"`
+		Body       string    `json:"body"`
+		User_id    uuid.UUID `json:"user_id"`
+	}
+
+	retValue := []createdChirpLower{}
+
+	resp, err := c.database.GetAllChirps(r.Context())
+	if err != nil {
+		fmt.Printf("error: error getting all chirps: %s", err)
+		w.WriteHeader(500)
+		return
+	}
+
+	temp := createdChirpLower{}
+	for _, chirp := range resp {
+		temp.ID = chirp.ID
+		temp.Created_at = chirp.CreatedAt
+		temp.Updated_at = chirp.UpdatedAt
+		temp.Body = chirp.Body
+		temp.User_id = chirp.UserID
+
+		retValue = append(retValue, temp)
+	}
+	responseData, err := json.Marshal(retValue)
+	if err != nil {
+		fmt.Printf("error: error marshalling chirps: %s", err)
+		w.WriteHeader(500)
+		return
+	}
+
+	w.Header().Set("Content-Type", "application/json")
+	w.WriteHeader(http.StatusOK)
+	w.Write(responseData)
+}
+
 func (c *apiConfig) addChirpsHandler(w http.ResponseWriter, r *http.Request) {
 	type inputPayload struct {
 		Body    string    `json:"body"`
@@ -134,6 +174,11 @@ func (c *apiConfig) addChirpsHandler(w http.ResponseWriter, r *http.Request) {
 		Updated_at time.Time `json:"updated_at"`
 		Body       string    `json:"body"`
 		User_id    uuid.UUID `json:"user_id"`
+	}
+
+	type queryParams struct {
+		body    string
+		user_id uuid.UUID
 	}
 
 	decoder := json.NewDecoder(r.Body)
@@ -156,6 +201,34 @@ func (c *apiConfig) addChirpsHandler(w http.ResponseWriter, r *http.Request) {
 		w.WriteHeader(400)
 		return
 	}
+
+	params := database.CreateChirpParams{
+		Body:   payload.Body,
+		UserID: payload.User_id,
+	}
+
+	createdChirp, err := c.database.CreateChirp(r.Context(), params)
+	if err != nil {
+		fmt.Printf("error: error creating new chirp: %s", err)
+		w.WriteHeader(500)
+		return
+	}
+	newChirpDataLower := createdChirpLower{
+		ID:         createdChirp.ID,
+		Created_at: createdChirp.CreatedAt,
+		Updated_at: createdChirp.UpdatedAt,
+		Body:       createdChirp.Body,
+		User_id:    createdChirp.UserID,
+	}
+	responseData, err := json.Marshal(newChirpDataLower)
+	if err != nil {
+		fmt.Printf("error: error decoding response: %s", err)
+		w.WriteHeader(500)
+		return
+	}
+	w.Header().Set("Content-Type", "application/json")
+	w.WriteHeader(http.StatusCreated)
+	w.Write(responseData)
 }
 
 func main() {
@@ -186,6 +259,7 @@ func main() {
 	mux.HandleFunc("POST /admin/reset", cfg.resetHandler)
 	mux.HandleFunc("POST /api/users", cfg.addUserHandler)
 	mux.HandleFunc("POST /api/chirps", cfg.addChirpsHandler)
+	mux.HandleFunc("GET /api/chirps", cfg.getAllChirpsHandler)
 	serv := http.Server{
 		Handler: mux,
 		Addr:    ":8080",
