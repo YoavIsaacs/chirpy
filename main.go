@@ -8,8 +8,11 @@ import (
 	"os"
 	"strings"
 	"sync/atomic"
+	"time"
 
 	"github.com/YoavIsaacs/chirpy/internal/database"
+	"github.com/google/uuid"
+	"github.com/joho/godotenv"
 	_ "github.com/lib/pq"
 )
 
@@ -47,11 +50,15 @@ func (c *apiConfig) metricsHandler(w http.ResponseWriter, r *http.Request) {
 }
 
 func (c *apiConfig) resetHandler(w http.ResponseWriter, r *http.Request) {
+	isDev := os.Getenv("PLATFORM") == "dev"
 	if r.Method != http.MethodPost {
 		w.WriteHeader(405)
 		fmt.Println(r.Method)
+	} else if !isDev {
+		w.WriteHeader(http.StatusForbidden)
 	} else {
 		c.fileserverHits.Store(0)
+		c.database.ResetUsers(r.Context())
 		w.Header().Add("Content-Type", "text/plain; charset=utf-8")
 		w.WriteHeader(200)
 		w.Write([]byte("Hits reset to 0"))
@@ -118,6 +125,13 @@ func (c *apiConfig) addUserHandler(w http.ResponseWriter, r *http.Request) {
 		Email string `json:"email"`
 	}
 
+	type responseLower struct {
+		ID         uuid.UUID `json:"id"`
+		Created_at time.Time `json:"created_at"`
+		Updated_at time.Time `json:"updated_at"`
+		Email      string    `json:"email"`
+	}
+
 	decoder := json.NewDecoder(r.Body)
 	emailDecoded := userEmail{}
 	err := decoder.Decode(&emailDecoded)
@@ -134,7 +148,14 @@ func (c *apiConfig) addUserHandler(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
-	responseData, err := json.Marshal(createdUsr)
+	userResp := responseLower{
+		ID:         createdUsr.ID,
+		Created_at: createdUsr.CreatedAt,
+		Updated_at: createdUsr.UpdatedAt,
+		Email:      createdUsr.Email,
+	}
+
+	responseData, err := json.Marshal(userResp)
 	if err != nil {
 		fmt.Printf("error: error decoding response: %s", err)
 		w.WriteHeader(500)
@@ -142,12 +163,17 @@ func (c *apiConfig) addUserHandler(w http.ResponseWriter, r *http.Request) {
 	}
 
 	w.Header().Set("Content-Type", "application/json")
-	w.WriteHeader(201)
+	w.WriteHeader(http.StatusCreated)
 	w.Write(responseData)
 }
 
 func main() {
 	mux := http.NewServeMux()
+	err := godotenv.Load(".env")
+	if err != nil {
+		fmt.Println("error: error loading .env file")
+		return
+	}
 
 	cfg := &apiConfig{}
 
@@ -168,7 +194,7 @@ func main() {
 	mux.HandleFunc("GET /admin/metrics", cfg.metricsHandler)
 	mux.HandleFunc("POST /admin/reset", cfg.resetHandler)
 	mux.HandleFunc("POST /api/validate_chirp", validateChirpHandler)
-	mux.HandleFunc("POST /api/users", addUserHandler)
+	mux.HandleFunc("POST /api/users", cfg.addUserHandler)
 	serv := http.Server{
 		Handler: mux,
 		Addr:    ":8080",
