@@ -9,8 +9,8 @@ import (
 	"strings"
 	"sync/atomic"
 
+	"github.com/YoavIsaacs/chirpy/internal/database"
 	_ "github.com/lib/pq"
-	"github.com/pressly/goose/v3/database"
 )
 
 type apiConfig struct {
@@ -112,6 +112,40 @@ func healthCheckHandler(w http.ResponseWriter, r *http.Request) {
 	}
 }
 
+func (c *apiConfig) addUserHandler(w http.ResponseWriter, r *http.Request) {
+	ctx := r.Context()
+	type userEmail struct {
+		Email string `json:"email"`
+	}
+
+	decoder := json.NewDecoder(r.Body)
+	emailDecoded := userEmail{}
+	err := decoder.Decode(&emailDecoded)
+	if err != nil {
+		fmt.Printf("error: error decoding json: %s", err)
+		w.WriteHeader(500)
+		return
+	}
+	email := emailDecoded.Email
+	createdUsr, err := c.database.CreateUser(ctx, email)
+	if err != nil {
+		fmt.Printf("error: error creating new user: %s", err)
+		w.WriteHeader(500)
+		return
+	}
+
+	responseData, err := json.Marshal(createdUsr)
+	if err != nil {
+		fmt.Printf("error: error decoding response: %s", err)
+		w.WriteHeader(500)
+		return
+	}
+
+	w.Header().Set("Content-Type", "application/json")
+	w.WriteHeader(201)
+	w.Write(responseData)
+}
+
 func main() {
 	mux := http.NewServeMux()
 
@@ -134,6 +168,7 @@ func main() {
 	mux.HandleFunc("GET /admin/metrics", cfg.metricsHandler)
 	mux.HandleFunc("POST /admin/reset", cfg.resetHandler)
 	mux.HandleFunc("POST /api/validate_chirp", validateChirpHandler)
+	mux.HandleFunc("POST /api/users", addUserHandler)
 	serv := http.Server{
 		Handler: mux,
 		Addr:    ":8080",
