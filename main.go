@@ -6,7 +6,6 @@ import (
 	"fmt"
 	"net/http"
 	"os"
-	"strings"
 	"sync/atomic"
 	"time"
 
@@ -62,50 +61,6 @@ func (c *apiConfig) resetHandler(w http.ResponseWriter, r *http.Request) {
 		w.Header().Add("Content-Type", "text/plain; charset=utf-8")
 		w.WriteHeader(200)
 		w.Write([]byte("Hits reset to 0"))
-	}
-}
-
-func validateChirpHandler(w http.ResponseWriter, r *http.Request) {
-	if r.Method != http.MethodPost {
-		w.WriteHeader(405)
-	} else {
-		type parameters struct {
-			Body string `json:"body"`
-		}
-		type returnValue struct {
-			Error       string `json:"error"`
-			CleanedBody string `json:"cleaned_body"`
-		}
-
-		decoder := json.NewDecoder(r.Body)
-		params := parameters{}
-		responseBody := returnValue{}
-		err := decoder.Decode(&params)
-		if err != nil {
-			responseBody.Error = "Something went wrong"
-			w.WriteHeader(500)
-		} else if len(params.Body) > 140 {
-			responseBody.Error = "Chirp is too long"
-			w.WriteHeader(400)
-		} else {
-			splitWords := strings.Fields(params.Body)
-			for i, word := range splitWords {
-				if strings.ToLower(word) == "kerfuffle" || strings.ToLower(word) == "sharbert" || strings.ToLower(word) == "fornax" {
-					splitWords[i] = "****"
-				}
-			}
-			responseBody.CleanedBody = strings.Join(splitWords, " ")
-			w.WriteHeader(200)
-		}
-		dat, err := json.Marshal(responseBody)
-		if err != nil {
-			fmt.Printf("error: error marshalling JSON: %s", err)
-			w.WriteHeader(500)
-			return
-		}
-
-		w.Header().Set("Content-Type", "application/json")
-		w.Write(dat)
 	}
 }
 
@@ -167,6 +122,42 @@ func (c *apiConfig) addUserHandler(w http.ResponseWriter, r *http.Request) {
 	w.Write(responseData)
 }
 
+func (c *apiConfig) addChirpsHandler(w http.ResponseWriter, r *http.Request) {
+	type inputPayload struct {
+		Body    string    `json:"body"`
+		User_id uuid.UUID `json:"user_id"`
+	}
+
+	type createdChirpLower struct {
+		ID         uuid.UUID `json:"id"`
+		Created_at time.Time `json:"created_at"`
+		Updated_at time.Time `json:"updated_at"`
+		Body       string    `json:"body"`
+		User_id    uuid.UUID `json:"user_id"`
+	}
+
+	decoder := json.NewDecoder(r.Body)
+	payload := inputPayload{}
+	err := decoder.Decode(&payload)
+	if err != nil {
+		fmt.Printf("error: error decoding json: %s", err)
+		w.WriteHeader(500)
+		return
+	}
+
+	if len(payload.Body) > 140 {
+		fmt.Println("error: chirp body length exceeds 140 characters")
+		w.WriteHeader(400)
+		return
+	}
+
+	if len(payload.Body) == 0 {
+		fmt.Println("error: chirp body cannot be empty")
+		w.WriteHeader(400)
+		return
+	}
+}
+
 func main() {
 	mux := http.NewServeMux()
 	err := godotenv.Load(".env")
@@ -193,8 +184,8 @@ func main() {
 	mux.HandleFunc("GET /api/healthz", healthCheckHandler)
 	mux.HandleFunc("GET /admin/metrics", cfg.metricsHandler)
 	mux.HandleFunc("POST /admin/reset", cfg.resetHandler)
-	mux.HandleFunc("POST /api/validate_chirp", validateChirpHandler)
 	mux.HandleFunc("POST /api/users", cfg.addUserHandler)
+	mux.HandleFunc("POST /api/chirps", cfg.addChirpsHandler)
 	serv := http.Server{
 		Handler: mux,
 		Addr:    ":8080",
