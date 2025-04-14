@@ -162,6 +162,55 @@ func (c *apiConfig) getAllChirpsHandler(w http.ResponseWriter, r *http.Request) 
 	w.Write(responseData)
 }
 
+func (c *apiConfig) getSingleChirpHandler(w http.ResponseWriter, r *http.Request) {
+	type createdChirpLower struct {
+		ID         uuid.UUID `json:"id"`
+		Created_at time.Time `json:"created_at"`
+		Updated_at time.Time `json:"updated_at"`
+		Body       string    `json:"body"`
+		User_id    uuid.UUID `json:"user_id"`
+	}
+
+	queryIDstr := r.PathValue("chirpID")
+
+	queryID, err := uuid.Parse(queryIDstr)
+	if err != nil {
+		fmt.Printf("error: error converting ID: %s", err)
+		w.WriteHeader(500)
+		return
+	}
+
+	chirp, err := c.database.GetSingleChirp(r.Context(), queryID)
+	if err != nil {
+		if err == sql.ErrNoRows {
+			fmt.Printf("error: error finding chirp with this ID: %s", err)
+			w.WriteHeader(http.StatusNotFound)
+			return
+		}
+		fmt.Printf("error: error fetching chirp: %s", err)
+		w.WriteHeader(500)
+		return
+	}
+	ret := createdChirpLower{
+		ID:         chirp.ID,
+		Created_at: chirp.CreatedAt,
+		Updated_at: chirp.UpdatedAt,
+		Body:       chirp.Body,
+		User_id:    chirp.UserID,
+	}
+
+	responseData, err := json.Marshal(ret)
+	if err != nil {
+		fmt.Printf("error: error marshalling chirps: %s", err)
+		w.WriteHeader(500)
+		return
+	}
+
+	w.Header().Set("Content-Type", "application/json")
+	w.WriteHeader(http.StatusOK)
+	w.Write(responseData)
+}
+
 func (c *apiConfig) addChirpsHandler(w http.ResponseWriter, r *http.Request) {
 	type inputPayload struct {
 		Body    string    `json:"body"`
@@ -260,6 +309,7 @@ func main() {
 	mux.HandleFunc("POST /api/users", cfg.addUserHandler)
 	mux.HandleFunc("POST /api/chirps", cfg.addChirpsHandler)
 	mux.HandleFunc("GET /api/chirps", cfg.getAllChirpsHandler)
+	mux.HandleFunc("GET /api/chirps/{chirpID}", cfg.getSingleChirpHandler)
 	serv := http.Server{
 		Handler: mux,
 		Addr:    ":8080",
