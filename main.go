@@ -9,6 +9,7 @@ import (
 	"sync/atomic"
 	"time"
 
+	"github.com/YoavIsaacs/chirpy/internal/auth"
 	"github.com/YoavIsaacs/chirpy/internal/database"
 	"github.com/google/uuid"
 	"github.com/joho/godotenv"
@@ -76,8 +77,9 @@ func healthCheckHandler(w http.ResponseWriter, r *http.Request) {
 
 func (c *apiConfig) addUserHandler(w http.ResponseWriter, r *http.Request) {
 	ctx := r.Context()
-	type userEmail struct {
-		Email string `json:"email"`
+	type paramsSent struct {
+		Email    string `json:"email"`
+		Password string `json:"password"`
 	}
 
 	type responseLower struct {
@@ -85,18 +87,28 @@ func (c *apiConfig) addUserHandler(w http.ResponseWriter, r *http.Request) {
 		Created_at time.Time `json:"created_at"`
 		Updated_at time.Time `json:"updated_at"`
 		Email      string    `json:"email"`
+		Password   string    `json:"password"`
 	}
 
 	decoder := json.NewDecoder(r.Body)
-	emailDecoded := userEmail{}
-	err := decoder.Decode(&emailDecoded)
+	paramsDecoded := paramsSent{}
+	err := decoder.Decode(&paramsDecoded)
 	if err != nil {
 		fmt.Printf("error: error decoding json: %s", err)
 		w.WriteHeader(500)
 		return
 	}
-	email := emailDecoded.Email
-	createdUsr, err := c.database.CreateUser(ctx, email)
+	hashed, err := auth.HashPassword(paramsDecoded.Password)
+	if err != nil {
+		fmt.Printf("error: error decoding json: %s", err)
+		w.WriteHeader(500)
+		return
+	}
+	params := database.CreateUserParams{
+		Email:          paramsDecoded.Email,
+		HashedPassword: hashed,
+	}
+	createdUsr, err := c.database.CreateUser(ctx, params)
 	if err != nil {
 		fmt.Printf("error: error creating new user: %s", err)
 		w.WriteHeader(500)
@@ -108,6 +120,7 @@ func (c *apiConfig) addUserHandler(w http.ResponseWriter, r *http.Request) {
 		Created_at: createdUsr.CreatedAt,
 		Updated_at: createdUsr.UpdatedAt,
 		Email:      createdUsr.Email,
+		Password:   createdUsr.HashedPassword,
 	}
 
 	responseData, err := json.Marshal(userResp)
@@ -280,6 +293,73 @@ func (c *apiConfig) addChirpsHandler(w http.ResponseWriter, r *http.Request) {
 	w.Write(responseData)
 }
 
+func (c *apiConfig) loginHandler(w http.ResponseWriter, r *http.Request) {
+	type expected struct {
+		Password string `json:"password"`
+		Email    string `json:"email"`
+	}
+
+	decoder := json.NewDecoder(r.Body)
+	paramsDecoded := expected{}
+	err := decoder.Decode(&paramsDecoded)
+	if err != nil {
+		fmt.Printf("error: error decoding json: %s", err)
+		w.WriteHeader(500)
+		return
+	}
+
+	hashed, err := c.database.GetHashedPasswordByUser(r.Context(), paramsDecoded.Email)
+	if err != nil {
+		fmt.Printf("error: error getting password: %s", err)
+		w.WriteHeader(500)
+		return
+	}
+
+	if hashed == "" {
+		w.WriteHeader(404)
+		return
+	}
+
+	err = auth.CheckPassword(hashed, paramsDecoded.Password)
+	if err != nil {
+		// Password is incorrect
+		w.WriteHeader(401)
+		return
+	}
+
+	user, err := c.database.GetUserByEmail(r.Context(), paramsDecoded.Email)
+	if err != nil {
+		fmt.Printf("error: error retrieving user: %s", err)
+		w.WriteHeader(500)
+		return
+	}
+
+	type userResponse struct {
+		ID         uuid.UUID `json:"id"`
+		Created_at time.Time `json:"created_at"`
+		Updated_at time.Time `json:"updated_at"`
+		Email      string    `json:"email"`
+	}
+
+	response := userResponse{
+		ID:         user.ID,
+		Created_at: user.CreatedAt,
+		Updated_at: user.UpdatedAt,
+		Email:      user.Email,
+	}
+
+	responseData, err := json.Marshal(response)
+	if err != nil {
+		fmt.Printf("error: error marshalling response: %s", err)
+		w.WriteHeader(500)
+		return
+	}
+
+	w.Header().Set("Content-Type", "application/json")
+	w.WriteHeader(http.StatusOK)
+	w.Write(responseData)
+}
+
 func main() {
 	mux := http.NewServeMux()
 	err := godotenv.Load(".env")
@@ -308,6 +388,7 @@ func main() {
 	mux.HandleFunc("POST /admin/reset", cfg.resetHandler)
 	mux.HandleFunc("POST /api/users", cfg.addUserHandler)
 	mux.HandleFunc("POST /api/chirps", cfg.addChirpsHandler)
+	mux.HandleFunc("POST /api/login", cfg.loginHandler)
 	mux.HandleFunc("GET /api/chirps", cfg.getAllChirpsHandler)
 	mux.HandleFunc("GET /api/chirps/{chirpID}", cfg.getSingleChirpHandler)
 	serv := http.Server{
